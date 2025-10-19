@@ -36,7 +36,41 @@ contract Crowdfunding is ReentrancyGuard {
 
     uint256 private s_campaignCounter;
     mapping(uint256 => Campaign) public s_campaigns;
+    // from campaignId -> contributor address, and then -> contribution amount
     mapping(uint256 => mapping(address => uint256)) public s_contributions;
+
+    /**
+     * @dev Modifier to check if a campaign exists
+     * @param campaignId The ID of the campaign to check
+     */
+    modifier campaignExists(uint256 campaignId) {
+        if (campaignId >= s_campaignCounter) {
+            revert Crowdfunding__CampaignDoesNotExist();
+        }
+        _;
+    }
+
+    /**
+     * @dev Modifier to check if the current time is before the campaign deadline
+     * @param campaignId The ID of the campaign to check
+     */
+    modifier beforeDeadline(uint256 campaignId) {
+        if (block.timestamp >= s_campaigns[campaignId].deadline) {
+            revert Crowdfunding__CampaignDeadlineHasPassed();
+        }
+        _;
+    }
+
+    /**
+     * @dev Modifier to check if the current time is after or at the campaign deadline
+     * @param campaignId The ID of the campaign to check
+     */
+    modifier afterDeadline(uint256 campaignId) {
+        if (block.timestamp < s_campaigns[campaignId].deadline) {
+            revert Crowdfunding__CampaignDeadlineHasPassed();
+        }
+        _;
+    }
 
     // Events
     /**
@@ -124,19 +158,14 @@ contract Crowdfunding is ReentrancyGuard {
      * @param campaignId The ID of the campaign to contribute to
      * @notice The contribution amount is sent as msg.value
      */
-    function contribute(uint256 campaignId) external payable {
+    function contribute(
+        uint256 campaignId
+    ) external payable campaignExists(campaignId) beforeDeadline(campaignId) {
         if (msg.value == 0) {
             revert Crowdfunding__ContributionMustBeGreaterThanZero();
         }
-        if (campaignId >= s_campaignCounter) {
-            revert Crowdfunding__CampaignDoesNotExist();
-        }
 
         Campaign storage campaign = s_campaigns[campaignId];
-
-        if (block.timestamp >= campaign.deadline) {
-            revert Crowdfunding__CampaignDeadlineHasPassed();
-        }
 
         s_contributions[campaignId][msg.sender] += msg.value;
 
@@ -148,5 +177,30 @@ contract Crowdfunding is ReentrancyGuard {
             msg.value,
             campaign.amountRaised
         );
+    }
+
+    /**
+     * @dev Returns the current state of a campaign
+     * @param campaignId The ID of the campaign
+     * @return The current CampaignState
+     */
+    function getCampaignState(
+        uint256 campaignId
+    ) public view campaignExists(campaignId) returns (CampaignState) {
+        Campaign storage campaign = s_campaigns[campaignId];
+
+        if (campaign.withdrawn) {
+            return CampaignState.WITHDRAWN;
+        }
+
+        if (block.timestamp >= campaign.deadline) {
+            if (campaign.amountRaised >= campaign.goal) {
+                return CampaignState.SUCCESSFUL;
+            } else {
+                return CampaignState.FAILED;
+            }
+        }
+
+        return CampaignState.ACTIVE;
     }
 }

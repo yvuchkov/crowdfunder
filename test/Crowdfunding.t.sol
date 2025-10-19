@@ -401,4 +401,169 @@ contract CrowdfundingTest is Test {
             contributionAmount
         );
     }
+
+    /*//////////////////////////////////////////////////////////////
+                    CAMPAIGN STATE MANAGEMENT TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_GetCampaignState_Active() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        Crowdfunding.CampaignState state = crowdfunding.getCampaignState(
+            campaignId
+        );
+        assertEq(uint256(state), uint256(Crowdfunding.CampaignState.ACTIVE));
+    }
+
+    function test_GetCampaignState_Successful() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        Crowdfunding.CampaignState state = crowdfunding.getCampaignState(
+            campaignId
+        );
+        assertEq(
+            uint256(state),
+            uint256(Crowdfunding.CampaignState.SUCCESSFUL)
+        );
+    }
+
+    function test_GetCampaignState_Failed() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: 1 ether}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        Crowdfunding.CampaignState state = crowdfunding.getCampaignState(
+            campaignId
+        );
+        assertEq(uint256(state), uint256(Crowdfunding.CampaignState.FAILED));
+    }
+
+    function test_GetCampaignState_RevertWhen_CampaignDoesNotExist() public {
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__CampaignDoesNotExist.selector
+        );
+        crowdfunding.getCampaignState(999);
+    }
+
+    function test_CampaignState_ActiveToSuccessful() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.ACTIVE)
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.ACTIVE)
+        );
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.SUCCESSFUL)
+        );
+    }
+
+    function test_CampaignState_ActiveToFailed() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.ACTIVE)
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: 1 ether}(campaignId);
+
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.ACTIVE)
+        );
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.FAILED)
+        );
+    }
+
+    function test_CampaignState_ExactGoalIsSuccessful() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.SUCCESSFUL)
+        );
+    }
+
+    function test_CampaignState_OverfundedIsSuccessful() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL + 2 ether}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.SUCCESSFUL)
+        );
+    }
 }
