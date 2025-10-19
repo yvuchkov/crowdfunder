@@ -40,6 +40,12 @@ contract CrowdfundingTest is Test {
         uint256 amount
     );
 
+    event RefundClaimed(
+        uint256 indexed campaignId,
+        address indexed contributor,
+        uint256 amount
+    );
+
     function setUp() public {
         crowdfunding = new Crowdfunding();
 
@@ -578,7 +584,6 @@ contract CrowdfundingTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_WithdrawFunds_Success() public {
-        // Create campaign
         vm.prank(creator);
         uint256 campaignId = crowdfunding.createCampaign(
             CAMPAIGN_TITLE,
@@ -587,34 +592,29 @@ contract CrowdfundingTest is Test {
             block.timestamp + CAMPAIGN_DURATION
         );
 
-        // Contribute to meet goal
         vm.prank(contributor1);
         crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
 
-        // Fast forward past deadline
         vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
 
-        // Record creator balance before withdrawal
         uint256 creatorBalanceBefore = creator.balance;
 
-        // Withdraw funds
         vm.prank(creator);
         vm.expectEmit(true, true, false, true);
         emit FundsWithdrawn(campaignId, creator, CAMPAIGN_GOAL);
         crowdfunding.withdrawFunds(campaignId);
 
-        // Verify creator received funds
         assertEq(creator.balance, creatorBalanceBefore + CAMPAIGN_GOAL);
 
-        // Verify contract balance decreased
         assertEq(address(crowdfunding).balance, 0);
 
-        // Verify campaign marked as withdrawn
         (, , , , , , , bool withdrawn, ) = crowdfunding.s_campaigns(campaignId);
         assertEq(withdrawn, true);
 
-        // Verify state is WITHDRAWN
-        assertEq(uint256(crowdfunding.getCampaignState(campaignId)), uint256(Crowdfunding.CampaignState.WITHDRAWN));
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.WITHDRAWN)
+        );
     }
 
     function test_WithdrawFunds_Overfunded() public {
@@ -626,7 +626,6 @@ contract CrowdfundingTest is Test {
             block.timestamp + CAMPAIGN_DURATION
         );
 
-        // Contribute more than goal
         uint256 totalContributed = CAMPAIGN_GOAL + 2 ether;
         vm.prank(contributor1);
         crowdfunding.contribute{value: totalContributed}(campaignId);
@@ -638,7 +637,6 @@ contract CrowdfundingTest is Test {
         vm.prank(creator);
         crowdfunding.withdrawFunds(campaignId);
 
-        // Should receive all contributed funds, not just the goal
         assertEq(creator.balance, creatorBalanceBefore + totalContributed);
     }
 
@@ -656,9 +654,10 @@ contract CrowdfundingTest is Test {
 
         vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
 
-        // Try to withdraw as non-creator
         vm.prank(contributor1);
-        vm.expectRevert(Crowdfunding.Crowdfunding__OnlyCreatorCanWithdraw.selector);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__OnlyCreatorCanWithdraw.selector
+        );
         crowdfunding.withdrawFunds(campaignId);
     }
 
@@ -674,9 +673,10 @@ contract CrowdfundingTest is Test {
         vm.prank(contributor1);
         crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
 
-        // Try to withdraw before deadline
         vm.prank(creator);
-        vm.expectRevert(Crowdfunding.Crowdfunding__CampaignDeadlineHasPassed.selector);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__CampaignDeadlineHasPassed.selector
+        );
         crowdfunding.withdrawFunds(campaignId);
     }
 
@@ -689,13 +689,11 @@ contract CrowdfundingTest is Test {
             block.timestamp + CAMPAIGN_DURATION
         );
 
-        // Contribute less than goal
         vm.prank(contributor1);
         crowdfunding.contribute{value: 1 ether}(campaignId);
 
         vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
 
-        // Try to withdraw when goal not reached
         vm.prank(creator);
         vm.expectRevert(Crowdfunding.Crowdfunding__GoalNotReached.selector);
         crowdfunding.withdrawFunds(campaignId);
@@ -715,13 +713,13 @@ contract CrowdfundingTest is Test {
 
         vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
 
-        // Withdraw funds first time
         vm.prank(creator);
         crowdfunding.withdrawFunds(campaignId);
 
-        // Try to withdraw again
         vm.prank(creator);
-        vm.expectRevert(Crowdfunding.Crowdfunding__FundsAlreadyWithdrawn.selector);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__FundsAlreadyWithdrawn.selector
+        );
         crowdfunding.withdrawFunds(campaignId);
     }
 
@@ -729,7 +727,9 @@ contract CrowdfundingTest is Test {
         vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
 
         vm.prank(creator);
-        vm.expectRevert(Crowdfunding.Crowdfunding__CampaignDoesNotExist.selector);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__CampaignDoesNotExist.selector
+        );
         crowdfunding.withdrawFunds(999);
     }
 
@@ -742,7 +742,6 @@ contract CrowdfundingTest is Test {
             block.timestamp + CAMPAIGN_DURATION
         );
 
-        // Contribute exactly the goal amount
         vm.prank(contributor1);
         crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
 
@@ -754,5 +753,202 @@ contract CrowdfundingTest is Test {
         crowdfunding.withdrawFunds(campaignId);
 
         assertEq(creator.balance, creatorBalanceBefore + CAMPAIGN_GOAL);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            REFUND TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_ClaimRefund_Success() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        uint256 contributionAmount = 1 ether;
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: contributionAmount}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        uint256 contributor1BalanceBefore = contributor1.balance;
+
+        vm.prank(contributor1);
+        vm.expectEmit(true, true, false, true);
+        emit RefundClaimed(campaignId, contributor1, contributionAmount);
+        crowdfunding.claimRefund(campaignId);
+
+        assertEq(
+            contributor1.balance,
+            contributor1BalanceBefore + contributionAmount
+        );
+
+        assertEq(crowdfunding.s_contributions(campaignId, contributor1), 0);
+
+        assertEq(address(crowdfunding).balance, 0);
+    }
+
+    function test_ClaimRefund_MultipleContributors() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        uint256 contribution1 = 1 ether;
+        uint256 contribution2 = 2 ether;
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: contribution1}(campaignId);
+
+        vm.prank(contributor2);
+        crowdfunding.contribute{value: contribution2}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        uint256 contributor1BalanceBefore = contributor1.balance;
+        uint256 contributor2BalanceBefore = contributor2.balance;
+
+        vm.prank(contributor1);
+        crowdfunding.claimRefund(campaignId);
+
+        vm.prank(contributor2);
+        crowdfunding.claimRefund(campaignId);
+
+        assertEq(
+            contributor1.balance,
+            contributor1BalanceBefore + contribution1
+        );
+        assertEq(
+            contributor2.balance,
+            contributor2BalanceBefore + contribution2
+        );
+
+        assertEq(address(crowdfunding).balance, 0);
+    }
+
+    function test_RevertWhen_ClaimRefundBeforeDeadline() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: 1 ether}(campaignId);
+
+        vm.prank(contributor1);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__CampaignDeadlineHasPassed.selector
+        );
+        crowdfunding.claimRefund(campaignId);
+    }
+
+    function test_RevertWhen_ClaimRefundFromSuccessfulCampaign() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        vm.prank(contributor1);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__CampaignWasSuccessful.selector
+        );
+        crowdfunding.claimRefund(campaignId);
+    }
+
+    function test_RevertWhen_ClaimRefundWithNoContribution() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: 1 ether}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        vm.prank(contributor2);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__NoContributionToRefund.selector
+        );
+        crowdfunding.claimRefund(campaignId);
+    }
+
+    function test_RevertWhen_ClaimRefundTwice() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: 1 ether}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        vm.prank(contributor1);
+        crowdfunding.claimRefund(campaignId);
+
+        vm.prank(contributor1);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__NoContributionToRefund.selector
+        );
+        crowdfunding.claimRefund(campaignId);
+    }
+
+    function test_ClaimRefund_PartialContributions() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: 0.5 ether}(campaignId);
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: 0.3 ether}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        uint256 balanceBefore = contributor1.balance;
+
+        vm.prank(contributor1);
+        crowdfunding.claimRefund(campaignId);
+
+        assertEq(contributor1.balance, balanceBefore + 0.8 ether);
+    }
+
+    function test_RevertWhen_ClaimRefundFromNonexistentCampaign() public {
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        vm.prank(contributor1);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__CampaignDoesNotExist.selector
+        );
+        crowdfunding.claimRefund(999);
     }
 }

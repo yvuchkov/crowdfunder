@@ -18,6 +18,9 @@ contract Crowdfunding is ReentrancyGuard {
     error Crowdfunding__GoalNotReached();
     error Crowdfunding__FundsAlreadyWithdrawn();
     error Crowdfunding__WithdrawalFailed();
+    error Crowdfunding__NoContributionToRefund();
+    error Crowdfunding__CampaignWasSuccessful();
+    error Crowdfunding__RefundFailed();
 
     enum CampaignState {
         ACTIVE,
@@ -116,6 +119,18 @@ contract Crowdfunding is ReentrancyGuard {
     event FundsWithdrawn(
         uint256 indexed campaignId,
         address indexed creator,
+        uint256 amount
+    );
+
+    /**
+     * @dev Emitted when a contributor claims a refund from a failed campaign
+     * @param campaignId The ID of the campaign
+     * @param contributor The address of the contributor
+     * @param amount The amount refunded in wei
+     */
+    event RefundClaimed(
+        uint256 indexed campaignId,
+        address indexed contributor,
         uint256 amount
     );
 
@@ -258,5 +273,43 @@ contract Crowdfunding is ReentrancyGuard {
         }
 
         emit FundsWithdrawn(campaignId, campaign.creator, amount);
+    }
+
+    /**
+     * @dev Allows contributors to claim refunds from failed campaigns
+     * @param campaignId The ID of the campaign to claim refund from
+     * @notice Campaign must have failed (deadline passed and goal not reached)
+     * @notice Uses ReentrancyGuard and checks-effects-interactions pattern
+     */
+    function claimRefund(
+        uint256 campaignId
+    )
+        external
+        nonReentrant
+        campaignExists(campaignId)
+        afterDeadline(campaignId)
+    {
+        Campaign storage campaign = s_campaigns[campaignId];
+
+        if (campaign.amountRaised >= campaign.goal) {
+            revert Crowdfunding__CampaignWasSuccessful();
+        }
+
+        uint256 contributionAmount = s_contributions[campaignId][msg.sender];
+
+        if (contributionAmount == 0) {
+            revert Crowdfunding__NoContributionToRefund();
+        }
+
+        s_contributions[campaignId][msg.sender] = 0;
+
+        (bool success, ) = payable(msg.sender).call{value: contributionAmount}(
+            ""
+        );
+        if (!success) {
+            revert Crowdfunding__RefundFailed();
+        }
+
+        emit RefundClaimed(campaignId, msg.sender, contributionAmount);
     }
 }
