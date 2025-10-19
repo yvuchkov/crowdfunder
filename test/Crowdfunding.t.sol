@@ -46,8 +46,14 @@ contract CrowdfundingTest is Test {
         uint256 amount
     );
 
+    event CampaignCancelled(
+        uint256 indexed campaignId,
+        address indexed creator
+    );
+
     function setUp() public {
-        crowdfunding = new Crowdfunding();
+        address platformFeeRecipient = makeAddr("platformFeeRecipient");
+        crowdfunding = new Crowdfunding(platformFeeRecipient);
 
         vm.deal(creator, INITIAL_BALANCE);
         vm.deal(contributor1, INITIAL_BALANCE);
@@ -92,7 +98,8 @@ contract CrowdfundingTest is Test {
             uint256 campaignDeadline,
             uint256 amountRaised,
             bool withdrawn,
-            bool refunded
+            bool refunded,
+            bool cancelled
         ) = crowdfunding.s_campaigns(campaignId);
 
         assertEq(id, 0);
@@ -104,6 +111,7 @@ contract CrowdfundingTest is Test {
         assertEq(amountRaised, 0);
         assertEq(withdrawn, false);
         assertEq(refunded, false);
+        assertEq(cancelled, false);
     }
 
     function test_CreateMultipleCampaigns() public {
@@ -206,7 +214,7 @@ contract CrowdfundingTest is Test {
             contributionAmount
         );
 
-        (, , , , , , uint256 amountRaised, , ) = crowdfunding.s_campaigns(
+        (, , , , , , uint256 amountRaised, , , ) = crowdfunding.s_campaigns(
             campaignId
         );
         assertEq(amountRaised, contributionAmount);
@@ -236,7 +244,7 @@ contract CrowdfundingTest is Test {
             contribution1 + contribution2
         );
 
-        (, , , , , , uint256 amountRaised, , ) = crowdfunding.s_campaigns(
+        (, , , , , , uint256 amountRaised, , , ) = crowdfunding.s_campaigns(
             campaignId
         );
         assertEq(amountRaised, contribution1 + contribution2);
@@ -269,7 +277,7 @@ contract CrowdfundingTest is Test {
             contribution2
         );
 
-        (, , , , , , uint256 amountRaised, , ) = crowdfunding.s_campaigns(
+        (, , , , , , uint256 amountRaised, , , ) = crowdfunding.s_campaigns(
             campaignId
         );
         assertEq(amountRaised, contribution1 + contribution2);
@@ -386,7 +394,7 @@ contract CrowdfundingTest is Test {
             deadline
         );
 
-        (, , , , uint256 campaignGoal, , , , ) = crowdfunding.s_campaigns(
+        (, , , , uint256 campaignGoal, , , , , ) = crowdfunding.s_campaigns(
             campaignId
         );
         assertEq(campaignGoal, goal);
@@ -599,16 +607,21 @@ contract CrowdfundingTest is Test {
 
         uint256 creatorBalanceBefore = creator.balance;
 
+        uint256 platformFee = (CAMPAIGN_GOAL * 200) / 10000;
+        uint256 creatorAmount = CAMPAIGN_GOAL - platformFee;
+
         vm.prank(creator);
         vm.expectEmit(true, true, false, true);
-        emit FundsWithdrawn(campaignId, creator, CAMPAIGN_GOAL);
+        emit FundsWithdrawn(campaignId, creator, creatorAmount);
         crowdfunding.withdrawFunds(campaignId);
 
-        assertEq(creator.balance, creatorBalanceBefore + CAMPAIGN_GOAL);
+        assertEq(creator.balance, creatorBalanceBefore + creatorAmount);
 
-        assertEq(address(crowdfunding).balance, 0);
+        assertEq(address(crowdfunding).balance, platformFee);
 
-        (, , , , , , , bool withdrawn, ) = crowdfunding.s_campaigns(campaignId);
+        (, , , , , , , bool withdrawn, , ) = crowdfunding.s_campaigns(
+            campaignId
+        );
         assertEq(withdrawn, true);
 
         assertEq(
@@ -634,10 +647,13 @@ contract CrowdfundingTest is Test {
 
         uint256 creatorBalanceBefore = creator.balance;
 
+        uint256 platformFee = (totalContributed * 200) / 10000;
+        uint256 creatorAmount = totalContributed - platformFee;
+
         vm.prank(creator);
         crowdfunding.withdrawFunds(campaignId);
 
-        assertEq(creator.balance, creatorBalanceBefore + totalContributed);
+        assertEq(creator.balance, creatorBalanceBefore + creatorAmount);
     }
 
     function test_RevertWhen_NonCreatorTriesToWithdraw() public {
@@ -749,10 +765,13 @@ contract CrowdfundingTest is Test {
 
         uint256 creatorBalanceBefore = creator.balance;
 
+        uint256 platformFee = (CAMPAIGN_GOAL * 200) / 10000;
+        uint256 creatorAmount = CAMPAIGN_GOAL - platformFee;
+
         vm.prank(creator);
         crowdfunding.withdrawFunds(campaignId);
 
-        assertEq(creator.balance, creatorBalanceBefore + CAMPAIGN_GOAL);
+        assertEq(creator.balance, creatorBalanceBefore + creatorAmount);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -846,7 +865,7 @@ contract CrowdfundingTest is Test {
 
         vm.prank(contributor1);
         vm.expectRevert(
-            Crowdfunding.Crowdfunding__CampaignDeadlineHasPassed.selector
+            Crowdfunding.Crowdfunding__CampaignWasSuccessful.selector
         );
         crowdfunding.claimRefund(campaignId);
     }
@@ -950,5 +969,402 @@ contract CrowdfundingTest is Test {
             Crowdfunding.Crowdfunding__CampaignDoesNotExist.selector
         );
         crowdfunding.claimRefund(999);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        VIEW FUNCTIONS TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_GetCampaignDetails() public {
+        uint256 deadline = block.timestamp + CAMPAIGN_DURATION;
+
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            deadline
+        );
+
+        (
+            uint256 id,
+            address campaignCreator,
+            string memory title,
+            string memory description,
+            uint256 goal,
+            uint256 campaignDeadline,
+            uint256 amountRaised,
+            bool withdrawn,
+            bool refunded,
+            bool cancelled
+        ) = crowdfunding.getCampaignDetails(campaignId);
+
+        assertEq(id, 0);
+        assertEq(campaignCreator, creator);
+        assertEq(title, CAMPAIGN_TITLE);
+        assertEq(description, CAMPAIGN_DESCRIPTION);
+        assertEq(goal, CAMPAIGN_GOAL);
+        assertEq(campaignDeadline, deadline);
+        assertEq(amountRaised, 0);
+        assertEq(withdrawn, false);
+        assertEq(refunded, false);
+        assertEq(cancelled, false);
+    }
+
+    function test_GetContribution() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        uint256 contributionAmount = 2 ether;
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: contributionAmount}(campaignId);
+
+        uint256 contribution = crowdfunding.getContribution(
+            campaignId,
+            contributor1
+        );
+        assertEq(contribution, contributionAmount);
+
+        uint256 noContribution = crowdfunding.getContribution(
+            campaignId,
+            contributor2
+        );
+        assertEq(noContribution, 0);
+    }
+
+    function test_GetAllCampaignIds() public {
+        vm.startPrank(creator);
+        crowdfunding.createCampaign(
+            "Campaign 1",
+            "Desc 1",
+            1 ether,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+        crowdfunding.createCampaign(
+            "Campaign 2",
+            "Desc 2",
+            2 ether,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+        crowdfunding.createCampaign(
+            "Campaign 3",
+            "Desc 3",
+            3 ether,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+        vm.stopPrank();
+
+        uint256[] memory campaignIds = crowdfunding.getAllCampaignIds();
+
+        assertEq(campaignIds.length, 3);
+        assertEq(campaignIds[0], 0);
+        assertEq(campaignIds[1], 1);
+        assertEq(campaignIds[2], 2);
+    }
+
+    function test_GetAllCampaignIds_Empty() public view {
+        uint256[] memory campaignIds = crowdfunding.getAllCampaignIds();
+        assertEq(campaignIds.length, 0);
+    }
+
+    function test_IsGoalReached_True() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        bool goalReached = crowdfunding.isGoalReached(campaignId);
+        assertTrue(goalReached);
+    }
+
+    function test_IsGoalReached_False() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: 1 ether}(campaignId);
+
+        bool goalReached = crowdfunding.isGoalReached(campaignId);
+        assertFalse(goalReached);
+    }
+
+    function test_IsGoalReached_NoContributions() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        bool goalReached = crowdfunding.isGoalReached(campaignId);
+        assertFalse(goalReached);
+    }
+
+    function test_GetTimeRemaining() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        uint256 timeRemaining = crowdfunding.getTimeRemaining(campaignId);
+        assertEq(timeRemaining, CAMPAIGN_DURATION);
+    }
+
+    function test_GetTimeRemaining_AfterDeadline() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        uint256 timeRemaining = crowdfunding.getTimeRemaining(campaignId);
+        assertEq(timeRemaining, 0);
+    }
+
+    function test_GetTimeRemaining_PartialTime() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.warp(block.timestamp + (CAMPAIGN_DURATION / 2));
+
+        uint256 timeRemaining = crowdfunding.getTimeRemaining(campaignId);
+        assertEq(timeRemaining, CAMPAIGN_DURATION / 2);
+    }
+
+    function test_GetTotalCampaigns() public {
+        assertEq(crowdfunding.getTotalCampaigns(), 0);
+
+        vm.startPrank(creator);
+        crowdfunding.createCampaign(
+            "Campaign 1",
+            "Desc 1",
+            1 ether,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+        assertEq(crowdfunding.getTotalCampaigns(), 1);
+
+        crowdfunding.createCampaign(
+            "Campaign 2",
+            "Desc 2",
+            2 ether,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+        assertEq(crowdfunding.getTotalCampaigns(), 2);
+
+        crowdfunding.createCampaign(
+            "Campaign 3",
+            "Desc 3",
+            3 ether,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+        assertEq(crowdfunding.getTotalCampaigns(), 3);
+        vm.stopPrank();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    CANCELLATION TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_CancelCampaign_Success() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(creator);
+        vm.expectEmit(true, true, false, false);
+        emit CampaignCancelled(campaignId, creator);
+        crowdfunding.cancelCampaign(campaignId);
+
+        (, , , , , , , , , bool cancelled) = crowdfunding.s_campaigns(
+            campaignId
+        );
+        assertEq(cancelled, true);
+
+        assertEq(
+            uint256(crowdfunding.getCampaignState(campaignId)),
+            uint256(Crowdfunding.CampaignState.CANCELLED)
+        );
+    }
+
+    function test_RevertWhen_NonCreatorTriesToCancel() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__OnlyCreatorCanCancel.selector
+        );
+        crowdfunding.cancelCampaign(campaignId);
+    }
+
+    function test_RevertWhen_CancelAfterDeadline() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        vm.prank(creator);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__CampaignDeadlineHasPassed.selector
+        );
+        crowdfunding.cancelCampaign(campaignId);
+    }
+
+    function test_RevertWhen_ContributeToCancelledCampaign() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(creator);
+        crowdfunding.cancelCampaign(campaignId);
+
+        vm.prank(contributor1);
+        vm.expectRevert(
+            Crowdfunding.Crowdfunding__CampaignIsCancelled.selector
+        );
+        crowdfunding.contribute{value: 1 ether}(campaignId);
+    }
+
+    function test_ClaimRefund_FromCancelledCampaign() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        uint256 contributionAmount = 5 ether;
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: contributionAmount}(campaignId);
+
+        vm.prank(creator);
+        crowdfunding.cancelCampaign(campaignId);
+
+        uint256 contributor1BalanceBefore = contributor1.balance;
+
+        vm.prank(contributor1);
+        vm.expectEmit(true, true, false, true);
+        emit RefundClaimed(campaignId, contributor1, contributionAmount);
+        crowdfunding.claimRefund(campaignId);
+
+        assertEq(
+            contributor1.balance,
+            contributor1BalanceBefore + contributionAmount
+        );
+        assertEq(crowdfunding.getContribution(campaignId, contributor1), 0);
+    }
+
+    function test_ClaimRefund_MultipleContributorsFromCancelledCampaign()
+        public
+    {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        uint256 contribution1 = 3 ether;
+        uint256 contribution2 = 7 ether;
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: contribution1}(campaignId);
+
+        vm.prank(contributor2);
+        crowdfunding.contribute{value: contribution2}(campaignId);
+
+        vm.prank(creator);
+        crowdfunding.cancelCampaign(campaignId);
+
+        uint256 contributor1BalanceBefore = contributor1.balance;
+        uint256 contributor2BalanceBefore = contributor2.balance;
+
+        vm.prank(contributor1);
+        crowdfunding.claimRefund(campaignId);
+
+        vm.prank(contributor2);
+        crowdfunding.claimRefund(campaignId);
+
+        assertEq(
+            contributor1.balance,
+            contributor1BalanceBefore + contribution1
+        );
+        assertEq(
+            contributor2.balance,
+            contributor2BalanceBefore + contribution2
+        );
+    }
+
+    function test_PlatformFee_CorrectCalculation() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        uint256 contractBalanceBefore = address(crowdfunding).balance;
+        assertEq(contractBalanceBefore, CAMPAIGN_GOAL);
+
+        vm.prank(creator);
+        crowdfunding.withdrawFunds(campaignId);
+
+        uint256 expectedPlatformFee = (CAMPAIGN_GOAL * 200) / 10000;
+        assertEq(address(crowdfunding).balance, expectedPlatformFee);
     }
 }
