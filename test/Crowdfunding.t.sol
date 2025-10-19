@@ -34,6 +34,12 @@ contract CrowdfundingTest is Test {
         uint256 totalRaised
     );
 
+    event FundsWithdrawn(
+        uint256 indexed campaignId,
+        address indexed creator,
+        uint256 amount
+    );
+
     function setUp() public {
         crowdfunding = new Crowdfunding();
 
@@ -565,5 +571,188 @@ contract CrowdfundingTest is Test {
             uint256(crowdfunding.getCampaignState(campaignId)),
             uint256(Crowdfunding.CampaignState.SUCCESSFUL)
         );
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        WITHDRAWAL TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_WithdrawFunds_Success() public {
+        // Create campaign
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        // Contribute to meet goal
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        // Fast forward past deadline
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        // Record creator balance before withdrawal
+        uint256 creatorBalanceBefore = creator.balance;
+
+        // Withdraw funds
+        vm.prank(creator);
+        vm.expectEmit(true, true, false, true);
+        emit FundsWithdrawn(campaignId, creator, CAMPAIGN_GOAL);
+        crowdfunding.withdrawFunds(campaignId);
+
+        // Verify creator received funds
+        assertEq(creator.balance, creatorBalanceBefore + CAMPAIGN_GOAL);
+
+        // Verify contract balance decreased
+        assertEq(address(crowdfunding).balance, 0);
+
+        // Verify campaign marked as withdrawn
+        (, , , , , , , bool withdrawn, ) = crowdfunding.s_campaigns(campaignId);
+        assertEq(withdrawn, true);
+
+        // Verify state is WITHDRAWN
+        assertEq(uint256(crowdfunding.getCampaignState(campaignId)), uint256(Crowdfunding.CampaignState.WITHDRAWN));
+    }
+
+    function test_WithdrawFunds_Overfunded() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        // Contribute more than goal
+        uint256 totalContributed = CAMPAIGN_GOAL + 2 ether;
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: totalContributed}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        uint256 creatorBalanceBefore = creator.balance;
+
+        vm.prank(creator);
+        crowdfunding.withdrawFunds(campaignId);
+
+        // Should receive all contributed funds, not just the goal
+        assertEq(creator.balance, creatorBalanceBefore + totalContributed);
+    }
+
+    function test_RevertWhen_NonCreatorTriesToWithdraw() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        // Try to withdraw as non-creator
+        vm.prank(contributor1);
+        vm.expectRevert(Crowdfunding.Crowdfunding__OnlyCreatorCanWithdraw.selector);
+        crowdfunding.withdrawFunds(campaignId);
+    }
+
+    function test_RevertWhen_WithdrawBeforeDeadline() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        // Try to withdraw before deadline
+        vm.prank(creator);
+        vm.expectRevert(Crowdfunding.Crowdfunding__CampaignDeadlineHasPassed.selector);
+        crowdfunding.withdrawFunds(campaignId);
+    }
+
+    function test_RevertWhen_GoalNotReached() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        // Contribute less than goal
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: 1 ether}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        // Try to withdraw when goal not reached
+        vm.prank(creator);
+        vm.expectRevert(Crowdfunding.Crowdfunding__GoalNotReached.selector);
+        crowdfunding.withdrawFunds(campaignId);
+    }
+
+    function test_RevertWhen_FundsAlreadyWithdrawn() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        // Withdraw funds first time
+        vm.prank(creator);
+        crowdfunding.withdrawFunds(campaignId);
+
+        // Try to withdraw again
+        vm.prank(creator);
+        vm.expectRevert(Crowdfunding.Crowdfunding__FundsAlreadyWithdrawn.selector);
+        crowdfunding.withdrawFunds(campaignId);
+    }
+
+    function test_RevertWhen_WithdrawFromNonexistentCampaign() public {
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        vm.prank(creator);
+        vm.expectRevert(Crowdfunding.Crowdfunding__CampaignDoesNotExist.selector);
+        crowdfunding.withdrawFunds(999);
+    }
+
+    function test_WithdrawFunds_ExactlyAtGoal() public {
+        vm.prank(creator);
+        uint256 campaignId = crowdfunding.createCampaign(
+            CAMPAIGN_TITLE,
+            CAMPAIGN_DESCRIPTION,
+            CAMPAIGN_GOAL,
+            block.timestamp + CAMPAIGN_DURATION
+        );
+
+        // Contribute exactly the goal amount
+        vm.prank(contributor1);
+        crowdfunding.contribute{value: CAMPAIGN_GOAL}(campaignId);
+
+        vm.warp(block.timestamp + CAMPAIGN_DURATION + 1);
+
+        uint256 creatorBalanceBefore = creator.balance;
+
+        vm.prank(creator);
+        crowdfunding.withdrawFunds(campaignId);
+
+        assertEq(creator.balance, creatorBalanceBefore + CAMPAIGN_GOAL);
     }
 }

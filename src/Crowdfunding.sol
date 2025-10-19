@@ -14,6 +14,10 @@ contract Crowdfunding is ReentrancyGuard {
     error Crowdfunding__CampaignDoesNotExist();
     error Crowdfunding__CampaignDeadlineHasPassed();
     error Crowdfunding__ContributionMustBeGreaterThanZero();
+    error Crowdfunding__OnlyCreatorCanWithdraw();
+    error Crowdfunding__GoalNotReached();
+    error Crowdfunding__FundsAlreadyWithdrawn();
+    error Crowdfunding__WithdrawalFailed();
 
     enum CampaignState {
         ACTIVE,
@@ -101,6 +105,18 @@ contract Crowdfunding is ReentrancyGuard {
         address indexed contributor,
         uint256 amount,
         uint256 totalRaised
+    );
+
+    /**
+     * @dev Emitted when funds are withdrawn from a successful campaign
+     * @param campaignId The ID of the campaign
+     * @param creator The address of the campaign creator
+     * @param amount The amount withdrawn in wei
+     */
+    event FundsWithdrawn(
+        uint256 indexed campaignId,
+        address indexed creator,
+        uint256 amount
     );
 
     /**
@@ -202,5 +218,45 @@ contract Crowdfunding is ReentrancyGuard {
         }
 
         return CampaignState.ACTIVE;
+    }
+
+    /**
+     * @dev Allows campaign creator to withdraw funds from a successful campaign
+     * @param campaignId The ID of the campaign to withdraw from
+     * @notice Campaign must be successful (goal reached and deadline passed)
+     * @notice Uses ReentrancyGuard and checks-effects-interactions pattern
+     */
+    function withdrawFunds(
+        uint256 campaignId
+    )
+        external
+        nonReentrant
+        campaignExists(campaignId)
+        afterDeadline(campaignId)
+    {
+        Campaign storage campaign = s_campaigns[campaignId];
+
+        if (msg.sender != campaign.creator) {
+            revert Crowdfunding__OnlyCreatorCanWithdraw();
+        }
+
+        if (campaign.amountRaised < campaign.goal) {
+            revert Crowdfunding__GoalNotReached();
+        }
+
+        if (campaign.withdrawn) {
+            revert Crowdfunding__FundsAlreadyWithdrawn();
+        }
+
+        campaign.withdrawn = true;
+
+        uint256 amount = campaign.amountRaised;
+
+        (bool success, ) = payable(campaign.creator).call{value: amount}("");
+        if (!success) {
+            revert Crowdfunding__WithdrawalFailed();
+        }
+
+        emit FundsWithdrawn(campaignId, campaign.creator, amount);
     }
 }
